@@ -27,7 +27,7 @@ AUTHORS = [
     },
 ]
 
-OUTPUT_FILE = "citations.csv"
+OUTPUT_FILE = "citations_combined.csv"
 # ────────────────────────────────────────────────────────────────────────────
 
 
