@@ -17,12 +17,12 @@ SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "JOUW_API_KEY_HIER")
 AUTHORS = [
     {
         "name": "Kaj S. Emanuel",
-        "author_id": None,           # Optioneel: vul in na eerste run (sneller)
+        "author_id": "lepUM34AAAAJ",
         "search_query": "Kaj S. Emanuel"
     },
     {
         "name": "Laura Zwaan",
-        "author_id": None,
+        "author_id": "CoLnfzkAAAAJ",
         "search_query": "Laura Zwaan"
     },
 ]
