@@ -5,6 +5,9 @@ on:
     - cron: '0 8 * * *'   # 08:00 UTC = 10:00 Amsterdam
   workflow_dispatch:        # Handmatig starten via GitHub UI
 
+permissions:
+  contents: write
+
 jobs:
   fetch-citations:
     runs-on: ubuntu-latest
