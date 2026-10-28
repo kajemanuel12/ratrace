@@ -1,11 +1,13 @@
 """
 Google Scholar Citation Tracker — SerpAPI versie
 Haalt dagelijks citaties op en slaat ze op in citations.csv
+Haalt periodiek (bij --papers flag) de volledige paperlijst op → papers_combined.csv
 """
 
 import csv
 import os
 import time
+import argparse
 from datetime import date
 import urllib.request
 import urllib.parse
@@ -18,16 +20,15 @@ AUTHORS = [
     {
         "name": "Kaj S. Emanuel",
         "author_id": "lepUM34AAAAJ",
-        "search_query": "Kaj S. Emanuel"
     },
     {
         "name": "Laura Zwaan",
         "author_id": "CoLnfzkAAAAJ",
-        "search_query": "Laura Zwaan"
     },
 ]
 
-OUTPUT_FILE = "citations_combined.csv"
+OUTPUT_FILE        = "citations_combined.csv"
+OUTPUT_PAPERS_FILE = "papers_combined.csv"
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -38,98 +39,158 @@ def serpapi_request(params: dict) -> dict:
         return json.loads(r.read().decode())
 
 
-def find_author_id(query: str) -> str | None:
-    """Zoek author_id op via Scholar Authors search."""
-    try:
-        data = serpapi_request({
-            "engine": "google_scholar_author",
-            "mauthors": query,
-        })
-        profiles = data.get("profiles", [])
-        if profiles:
-            author_id = profiles[0].get("author_id")
-            print(f"  Gevonden author_id: {author_id}")
-            return author_id
-    except Exception as e:
-        print(f"  Fout bij zoeken author_id: {e}")
-    return None
+# ── Dagelijkse citatiefetch ──────────────────────────────────────────────────
 
-
-def get_citation_count(author_config: dict) -> dict:
+def get_citation_count(author: dict) -> dict:
     result = {
-        "name": author_config["name"],
+        "name": author["name"],
         "citations": None,
         "h_index": None,
         "i10_index": None,
-        "error": None
+        "error": None,
     }
-
     try:
-        author_id = author_config.get("author_id")
-        if not author_id:
-            author_id = find_author_id(author_config["search_query"])
-
-        if not author_id:
-            result["error"] = "author_id niet gevonden"
-            return result
-
         data = serpapi_request({
             "engine": "google_scholar_author",
-            "author_id": author_id,
+            "author_id": author["author_id"],
         })
-
-        cited_by = data.get("cited_by", {})
-        table = cited_by.get("table", [])
-
-        # Citaties ophalen
-        citations = None
-        h_index = None
-        i10_index = None
-
-        for row in table:
+        for row in data.get("cited_by", {}).get("table", []):
             if "citations" in row:
-                citations = row["citations"].get("all")
+                result["citations"] = row["citations"].get("all")
             if "h_index" in row:
-                h_index = row["h_index"].get("all")
+                result["h_index"] = row["h_index"].get("all")
             if "i10_index" in row:
-                i10_index = row["i10_index"].get("all")
-
-        result["citations"] = citations
-        result["h_index"] = h_index
-        result["i10_index"] = i10_index
-
-        print(f"✓ {author_config['name']}: {citations} citaties (h={h_index}, i10={i10_index})")
-
+                result["i10_index"] = row["i10_index"].get("all")
+        print(f"✓ {author['name']}: {result['citations']} citaties "
+              f"(h={result['h_index']}, i10={result['i10_index']})")
     except Exception as e:
         result["error"] = str(e)
-        print(f"✗ {author_config['name']}: fout — {e}")
-
+        print(f"✗ {author['name']}: fout — {e}")
     return result
 
 
-def save_to_csv(results: list, filename: str):
+def save_citations(results: list):
     today = date.today().isoformat()
-    file_exists = os.path.isfile(filename)
-
-    with open(filename, "a", newline="", encoding="utf-8") as f:
+    file_exists = os.path.isfile(OUTPUT_FILE)
+    with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
         fieldnames = ["date", "name", "citations", "h_index", "i10_index", "error"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
         for r in results:
             writer.writerow({
-                "date": today,
-                "name": r["name"],
+                "date":      today,
+                "name":      r["name"],
                 "citations": r["citations"],
-                "h_index": r["h_index"],
+                "h_index":   r["h_index"],
                 "i10_index": r["i10_index"],
-                "error": r.get("error", "")
+                "error":     r.get("error", ""),
+            })
+    print(f"✓ Citaties opgeslagen in {OUTPUT_FILE}")
+
+
+# ── Paperlijst fetch (periodiek) ────────────────────────────────────────────
+
+def get_papers(author: dict) -> list:
+    """
+    Haalt alle papers op via paginering (start=0, 20, 40, …).
+    Geeft lijst van dicts terug met: author_id, title, year, citations.
+    """
+    papers = []
+    start = 0
+    page_size = 20
+
+    while True:
+        try:
+            data = serpapi_request({
+                "engine":    "google_scholar_author",
+                "author_id": author["author_id"],
+                "sort":      "pubdate",
+                "start":     start,
+            })
+        except Exception as e:
+            print(f"  Fout bij ophalen pagina start={start}: {e}")
+            break
+
+        articles = data.get("articles", [])
+        if not articles:
+            break
+
+        for art in articles:
+            papers.append({
+                "author_id": author["author_id"],
+                "name":      author["name"],
+                "title":     art.get("title", ""),
+                "year":      art.get("year", ""),
+                "citations": art.get("cited_by", {}).get("value", 0),
+                "link":      art.get("link", ""),
             })
 
-    print(f"✓ Opgeslagen in {filename}")
+        print(f"  {author['name']}: {len(papers)} papers opgehaald (pagina start={start})")
 
+        # Stop als er minder dan een volle pagina terugkwam
+        if len(articles) < page_size:
+            break
+
+        start += page_size
+        time.sleep(1)  # beleefd pagineren
+
+    return papers
+
+
+def save_papers(all_papers: list):
+    today = date.today().isoformat()
+    fieldnames = ["fetch_date", "author_id", "name", "title", "year", "citations", "link"]
+
+    # Overschrijf het bestand volledig bij elke run (snapshot)
+    with open(OUTPUT_PAPERS_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for p in all_papers:
+            writer.writerow({"fetch_date": today, **p})
+
+    print(f"✓ {len(all_papers)} papers opgeslagen in {OUTPUT_PAPERS_FILE}")
+
+
+def print_citations_per_paper_year(all_papers: list):
+    """Bereken en druk citaties/paper-jaar af per auteur."""
+    current_year = date.today().year
+    from collections import defaultdict
+    stats = defaultdict(lambda: {"papers": 0, "total_cit": 0, "total_paper_years": 0})
+
+    for p in all_papers:
+        try:
+            yr = int(p["year"])
+        except (ValueError, TypeError):
+            continue
+        age = max(current_year - yr, 1)  # minimaal 1 jaar
+        cit = int(p["citations"]) if p["citations"] else 0
+        s = stats[p["name"]]
+        s["papers"] += 1
+        s["total_cit"] += cit
+        s["total_paper_years"] += age
+
+    print("\n── Citaties per paper-jaar ──────────────────────")
+    for name, s in stats.items():
+        if s["total_paper_years"] > 0:
+            rate = s["total_cit"] / s["total_paper_years"]
+            print(f"  {name}: {s['papers']} papers, "
+                  f"{s['total_cit']} citaties, "
+                  f"{s['total_paper_years']} paper-jaren → "
+                  f"{rate:.2f} cit/paper-jaar")
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--papers",
+        action="store_true",
+        help="Haal ook de volledige paperlijst op (trager, meer API calls)",
+    )
+    args = parser.parse_args()
+
     print("=" * 50)
     print(f"Citation Tracker — {date.today().isoformat()}")
     print("=" * 50)
@@ -138,23 +199,32 @@ def main():
         print("⚠ Stel SERPAPI_KEY in als environment variable!")
         return
 
+    # ── Dagelijkse citatiefetch ──
     results = []
     for i, author in enumerate(AUTHORS):
-        print(f"\nOpvragen: {author['name']}...")
-        result = get_citation_count(author)
-        results.append(result)
+        print(f"\nOpvragen citaties: {author['name']}...")
+        results.append(get_citation_count(author))
         if i < len(AUTHORS) - 1:
             time.sleep(2)
 
-    save_to_csv(results, OUTPUT_FILE)
+    save_citations(results)
+
+    # ── Paperlijst (optioneel) ──
+    if args.papers:
+        print("\n── Paperlijst ophalen ───────────────────────────")
+        all_papers = []
+        for i, author in enumerate(AUTHORS):
+            print(f"\nPapers ophalen: {author['name']}...")
+            papers = get_papers(author)
+            all_papers.extend(papers)
+            if i < len(AUTHORS) - 1:
+                time.sleep(2)
+
+        save_papers(all_papers)
+        print_citations_per_paper_year(all_papers)
 
     print("\n" + "=" * 50)
     print("Klaar!")
-    for r in results:
-        if r["citations"] is not None:
-            print(f"  {r['name']}: {r['citations']} citaties")
-        else:
-            print(f"  {r['name']}: FOUT — {r['error']}")
 
 
 if __name__ == "__main__":

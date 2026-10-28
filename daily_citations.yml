@@ -1,0 +1,53 @@
+name: Dagelijkse Citatie Tracker
+
+on:
+  schedule:
+    - cron: '0 8 * * *'      # dagelijks 08:00 UTC = 10:00 Amsterdam (citaties)
+    - cron: '0 9 * * 1'      # maandags 09:00 UTC (paperlijst, ~4 extra API calls)
+  workflow_dispatch:           # Handmatig starten via GitHub UI
+    inputs:
+      fetch_papers:
+        description: 'Ook paperlijst ophalen? (true/false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-citations:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Python instellen
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Dagelijkse citaties ophalen
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+        run: python fetch_citations.py
+
+      - name: Paperlijst ophalen (maandag of handmatig)
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+        # Draait op maandag (github.event_name == 'schedule' en dag = maandag)
+        # of als handmatig gestart met fetch_papers=true
+        if: |
+          (github.event_name == 'schedule' && github.event.schedule == '0 9 * * 1') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.fetch_papers == 'true')
+        run: python fetch_citations.py --papers
+
+      - name: CSV committen
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add citations_combined.csv papers_combined.csv
+          git diff --staged --quiet || git commit -m "📊 Citaties bijgewerkt: $(date '+%Y-%m-%d')"
+          git push
